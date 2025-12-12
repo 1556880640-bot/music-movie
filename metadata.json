@@ -1,0 +1,5 @@
+{
+  "name": "AI 音乐 MV 生成器",
+  "description": "上传音乐，自动通过 AI 分析歌词、情感，并生成匹配的视觉背景和酷炫字幕，打造专属 Web MV。",
+  "requestFramePermissions": []
+}
