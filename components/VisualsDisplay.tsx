@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { GeneratedImage, AspectRatio } from '../types';
+import { GeneratedVisual, AspectRatio } from '../types';
 
 interface VisualsDisplayProps {
   currentTime: number;
-  images: GeneratedImage[];
+  images: GeneratedVisual[];
   aspectRatio: AspectRatio;
 }
 
 const VisualsDisplay: React.FC<VisualsDisplayProps> = ({ currentTime, images, aspectRatio }) => {
-  const [activeImage, setActiveImage] = useState<GeneratedImage | null>(null);
+  const [activeImage, setActiveImage] = useState<GeneratedVisual | null>(null);
 
   useEffect(() => {
     if (images.length === 0) return;
@@ -40,7 +40,7 @@ const VisualsDisplay: React.FC<VisualsDisplayProps> = ({ currentTime, images, as
           }`}
         >
           <img
-            src={img.imageUrl}
+            src={img.mediaUrl}
             alt={img.prompt}
             className={`w-full h-full object-cover transform transition-transform duration-[20000ms] ease-linear ${
                 activeImage?.timeIndex === img.timeIndex ? 'scale-110' : 'scale-100'

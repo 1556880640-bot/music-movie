@@ -1,14 +1,13 @@
 import React, { useRef, useEffect, useState, useImperativeHandle, forwardRef } from 'react';
-import { GeneratedImage, LyricSegment, AspectRatio } from '../types';
+import { GeneratedVisual, LyricSegment, AspectRatio, VisualType, AnimationType } from '../types';
 
 interface CanvasPlayerProps {
   currentTime: number;
   lyrics: LyricSegment[];
-  images: GeneratedImage[];
+  images: GeneratedVisual[];
   aspectRatio: AspectRatio;
-  title: string; // Add title prop
-  width?: number;
-  height?: number;
+  title: string;
+  animationType: AnimationType;
 }
 
 export interface CanvasPlayerRef {
@@ -20,13 +19,18 @@ const CanvasPlayer = forwardRef<CanvasPlayerRef, CanvasPlayerProps>(({
   lyrics, 
   images, 
   aspectRatio,
-  title
+  title,
+  animationType
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Caches
   const imageCache = useRef<Map<string, HTMLImageElement>>(new Map());
+  const videoCache = useRef<Map<string, HTMLVideoElement>>(new Map());
+  
   const [fontsLoaded, setFontsLoaded] = useState(false);
 
-  // Expose canvas to parent for recording
+  // Expose canvas to parent
   useImperativeHandle(ref, () => ({
     getCanvas: () => canvasRef.current
   }));
@@ -36,13 +40,26 @@ const CanvasPlayer = forwardRef<CanvasPlayerRef, CanvasPlayerProps>(({
     document.fonts.ready.then(() => setFontsLoaded(true));
   }, []);
 
-  // Preload Images
+  // Preload Visuals
   useEffect(() => {
-    images.forEach(img => {
-      if (!imageCache.current.has(img.imageUrl)) {
-        const image = new Image();
-        image.src = img.imageUrl;
-        imageCache.current.set(img.imageUrl, image);
+    images.forEach(vis => {
+      if (vis.type === VisualType.Image) {
+        if (!imageCache.current.has(vis.mediaUrl)) {
+          const image = new Image();
+          image.src = vis.mediaUrl;
+          imageCache.current.set(vis.mediaUrl, image);
+        }
+      } else if (vis.type === VisualType.Video) {
+        if (!videoCache.current.has(vis.mediaUrl)) {
+           const vid = document.createElement('video');
+           vid.src = vis.mediaUrl;
+           vid.muted = true; // Must be muted to autoplay/play via script
+           vid.loop = true;
+           vid.playsInline = true;
+           vid.preload = "auto";
+           vid.load();
+           videoCache.current.set(vis.mediaUrl, vid);
+        }
       }
     });
   }, [images]);
@@ -54,14 +71,11 @@ const CanvasPlayer = forwardRef<CanvasPlayerRef, CanvasPlayerProps>(({
 
   // Helper to wrap text
   const getWrappedLines = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number) => {
-    const words = text.split(''); // Split by char for CJK mixed support
+    const words = text.split(''); 
     const lines = [];
     let currentLine = words[0] || '';
 
-    // Quick check if whole text fits
-    if (ctx.measureText(text).width <= maxWidth) {
-        return [text];
-    }
+    if (ctx.measureText(text).width <= maxWidth) return [text];
 
     for (let i = 1; i < words.length; i++) {
         const word = words[i];
@@ -82,213 +96,289 @@ const CanvasPlayer = forwardRef<CanvasPlayerRef, CanvasPlayerProps>(({
     const canvas = canvasRef.current;
     if (!canvas || !fontsLoaded) return;
 
-    const ctx = canvas.getContext('2d', { alpha: false }); // Optimization
+    const ctx = canvas.getContext('2d', { alpha: false }); 
     if (!ctx) return;
 
     const cx = canvasWidth / 2;
     const cy = canvasHeight / 2;
 
-    // --- 1. Draw Background (Visuals) ---
-    // Find active image
-    let activeImgData = images[0];
-    
-    // Simple logic: Find the last image that started before currentTime
+    // --- 1. Identify Active Visual ---
+    let activeVisual = images[0];
     for (let i = 0; i < images.length; i++) {
       if (currentTime >= images[i].timeIndex) {
-        activeImgData = images[i];
+        activeVisual = images[i];
       } else {
         break;
       }
     }
 
-    if (activeImgData) {
-        const img = imageCache.current.get(activeImgData.imageUrl);
-        if (img && img.complete) {
-            // Ken Burns Effect Calculation
-            // Calculate time elapsed for this image
-            const timeElapsed = currentTime - activeImgData.timeIndex;
-            const duration = 10; // Assume 10s effect duration or until next image
-            const progress = Math.min(timeElapsed / duration, 1);
-            
-            // Scale goes from 1.0 to 1.1
-            const scale = 1.0 + (progress * 0.1); 
-            
-            // Draw
-            ctx.save();
-            // Center pivot
-            ctx.translate(cx, cy);
-            ctx.scale(scale, scale);
-            ctx.translate(-cx, -cy);
-            
-            // Cover fit
-            const imgRatio = img.width / img.height;
-            const canvasRatio = canvasWidth / canvasHeight;
-            let renderW, renderH, offsetX, offsetY;
+    // --- 2. Draw Visual ---
+    if (activeVisual) {
+        if (activeVisual.type === VisualType.Image) {
+             const img = imageCache.current.get(activeVisual.mediaUrl);
+             // Pause all videos to save resources
+             videoCache.current.forEach(v => v.pause());
 
-            if (imgRatio > canvasRatio) {
-                renderH = canvasHeight;
-                renderW = img.width * (canvasHeight / img.height);
-                offsetX = (canvasWidth - renderW) / 2;
-                offsetY = 0;
+             if (img && img.complete) {
+                // Ken Burns
+                const timeElapsed = currentTime - activeVisual.timeIndex;
+                const progress = Math.min(timeElapsed / 10, 1);
+                const scale = 1.0 + (progress * 0.1); 
+                
+                ctx.save();
+                ctx.translate(cx, cy);
+                ctx.scale(scale, scale);
+                ctx.translate(-cx, -cy);
+                
+                // Cover fit logic
+                const imgRatio = img.width / img.height;
+                const canvasRatio = canvasWidth / canvasHeight;
+                let renderW, renderH, offsetX, offsetY;
+                if (imgRatio > canvasRatio) {
+                    renderH = canvasHeight;
+                    renderW = img.width * (canvasHeight / img.height);
+                    offsetX = (canvasWidth - renderW) / 2;
+                    offsetY = 0;
+                } else {
+                    renderW = canvasWidth;
+                    renderH = img.height * (canvasWidth / img.width);
+                    offsetX = 0;
+                    offsetY = (canvasHeight - renderH) / 2;
+                }
+                ctx.drawImage(img, offsetX, offsetY, renderW, renderH);
+                ctx.restore();
+             } else {
+                 ctx.fillStyle = '#000';
+                 ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+             }
+        } 
+        else if (activeVisual.type === VisualType.Video) {
+            const vid = videoCache.current.get(activeVisual.mediaUrl);
+            
+            videoCache.current.forEach((v, k) => {
+                if (k === activeVisual.mediaUrl) {
+                    if (v.paused) v.play().catch(e => console.warn(e));
+                } else {
+                    if (!v.paused) v.pause();
+                }
+            });
+
+            if (vid && vid.readyState >= 2) {
+                ctx.save();
+                const vidRatio = vid.videoWidth / vid.videoHeight;
+                const canvasRatio = canvasWidth / canvasHeight;
+                let renderW, renderH, offsetX, offsetY;
+                
+                if (vidRatio > canvasRatio) {
+                     renderH = canvasHeight;
+                     renderW = vid.videoWidth * (canvasHeight / vid.videoHeight);
+                     offsetX = (canvasWidth - renderW) / 2;
+                     offsetY = 0;
+                } else {
+                     renderW = canvasWidth;
+                     renderH = vid.videoHeight * (canvasWidth / vid.videoWidth);
+                     offsetX = 0;
+                     offsetY = (canvasHeight - renderH) / 2;
+                }
+                ctx.drawImage(vid, offsetX, offsetY, renderW, renderH);
+                ctx.restore();
             } else {
-                renderW = canvasWidth;
-                renderH = img.height * (canvasWidth / img.width);
-                offsetX = 0;
-                offsetY = (canvasHeight - renderH) / 2;
+                ctx.fillStyle = '#111';
+                ctx.fillRect(0,0, canvasWidth, canvasHeight);
             }
-
-            ctx.globalAlpha = 1;
-            ctx.drawImage(img, offsetX, offsetY, renderW, renderH);
-            ctx.restore();
         }
     } else {
-        // Black BG fallback
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     }
 
-    // --- 2. Overlay (Dim) ---
+    // --- 3. Overlay ---
     ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // --- 3. Logic: Intro Title vs Lyrics ---
+    // --- 4. Render Text (Title or Lyrics) ---
     const firstLyricTime = lyrics.length > 0 ? lyrics[0].startTime : 0;
-    
-    // Check if we are in the intro phase (before first lyric)
-    // We add a 0.5s buffer so the title fades out just as lyrics start
     const isIntro = lyrics.length > 0 && currentTime < (firstLyricTime - 0.5);
 
     if (isIntro) {
-        // --- Draw Title (Intro Mode) ---
         ctx.save();
-        
-        // Font Settings for Title
         const titleSize = isPortrait ? 100 : 160;
         ctx.font = `900 ${titleSize}px "Noto Sans SC", sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        
-        // Fade in/out logic
-        // Fade in first 1s, Fade out last 1s of intro
         let alpha = 1;
         if (currentTime < 1) alpha = currentTime; 
-        else if (currentTime > (firstLyricTime - 1.5)) {
-            alpha = Math.max(0, (firstLyricTime - 0.5) - currentTime);
-        }
-
+        else if (currentTime > (firstLyricTime - 1.5)) alpha = Math.max(0, (firstLyricTime - 0.5) - currentTime);
         ctx.globalAlpha = alpha;
-
-        // Subtle Pulse Scale
-        const pulse = 1 + Math.sin(currentTime * 2) * 0.02;
-        ctx.translate(cx, cy);
-        ctx.scale(pulse, pulse);
-        ctx.translate(-cx, -cy);
-
-        // Glow
-        ctx.shadowColor = '#a855f7'; // Purple glow
         
-        // Wrapping Title
         const maxWidth = canvasWidth * 0.85;
         const lines = getWrappedLines(ctx, title, maxWidth);
-        
         const lineHeight = titleSize * 1.2;
-        const totalHeight = lines.length * lineHeight;
-        const startY = cy - (totalHeight / 2) + (lineHeight / 2);
+        const startY = cy - (lines.length * lineHeight / 2) + (lineHeight / 2);
 
-        // Gradient Fill
         const gradient = ctx.createLinearGradient(cx - maxWidth/2, cy, cx + maxWidth/2, cy);
-        gradient.addColorStop(0, '#f472b6'); // Pink
-        gradient.addColorStop(1, '#c084fc'); // Purple
+        gradient.addColorStop(0, '#f472b6'); 
+        gradient.addColorStop(1, '#c084fc'); 
         ctx.fillStyle = gradient;
         
         lines.forEach((line, i) => {
-            const y = startY + (i * lineHeight);
-            ctx.shadowBlur = 40;
-            ctx.fillText(line, cx, y);
-            
-            ctx.shadowBlur = 0; // Stroke usually doesn't need shadow here or it gets too muddy
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = 'white';
-            ctx.strokeText(line, cx, y);
+             ctx.fillText(line, cx, startY + i * lineHeight);
+             ctx.lineWidth = 3;
+             ctx.strokeStyle = 'white';
+             ctx.strokeText(line, cx, startY + i * lineHeight);
         });
-
-        // Optional "Music Video" subtitle
-        const subtitleY = startY + (lines.length * lineHeight) - (lineHeight/2) + titleSize/2 + 20;
-
-        ctx.shadowBlur = 0;
-        ctx.font = `700 ${isPortrait ? 40 : 60}px "Noto Sans SC", sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText("MUSIC VIDEO", cx, subtitleY);
-
         ctx.restore();
-
     } else {
-        // --- Draw Lyrics (Standard Mode) ---
+        // --- LYRICS RENDERING ---
         const activeLyric = lyrics.find(seg => currentTime >= seg.startTime && currentTime < seg.endTime);
         
         if (activeLyric) {
             const text = activeLyric.text;
-            
-            // Font Settings
             const fontSize = isPortrait ? 80 : 120;
             ctx.font = `900 ${fontSize}px "Noto Sans SC", sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
 
-            // Wrapping Logic
-            const maxWidth = canvasWidth * 0.85; // Leave 15% margin
+            const maxWidth = canvasWidth * 0.85;
             const lines = getWrappedLines(ctx, text, maxWidth);
-
             const lineHeight = fontSize * 1.25;
             const totalHeight = lines.length * lineHeight;
             const startY = cy - (totalHeight / 2) + (lineHeight / 2);
-
-            // Entry Animation (Fade in + slight slide up)
-            const lyricElapsed = currentTime - activeLyric.startTime;
-            const entryDuration = 0.5;
-            let alpha = 1;
-            let yOffset = 0;
-
-            if (lyricElapsed < entryDuration) {
-                const ease = 1 - Math.pow(1 - (lyricElapsed / entryDuration), 3); // Cubic ease out
-                alpha = ease;
-                yOffset = 20 * (1 - ease);
-            }
+            
+            const lyricDuration = activeLyric.endTime - activeLyric.startTime;
+            const elapsed = currentTime - activeLyric.startTime;
+            const progress = Math.min(elapsed / lyricDuration, 1);
 
             ctx.save();
-            ctx.globalAlpha = alpha;
-
-            // --- Glow Effect (Neon) ---
-            ctx.shadowColor = '#e60073'; // Pinkish glow
-
-            // --- Gradient Text ---
-            // Gradient across the probable width
-            const gradient = ctx.createLinearGradient(cx - (maxWidth/2), cy, cx + (maxWidth/2), cy);
-            gradient.addColorStop(0, '#67e8f9'); // Cyan
-            gradient.addColorStop(0.5, '#ffffff'); // White
-            gradient.addColorStop(1, '#d8b4fe'); // Purple
-
-            ctx.fillStyle = gradient;
             
-            // Draw Text Lines
-            lines.forEach((l, i) => {
-                const yPos = startY + (i * lineHeight) + yOffset;
+            // --- NEW RHYTHMIC ANIMATIONS ---
+
+            if (animationType === AnimationType.Standard) {
+                 // Standard Fade In
+                 let alpha = Math.min(elapsed * 2, 1);
+                 let yOff = (1 - alpha) * 20;
+                 ctx.globalAlpha = alpha;
+                 ctx.fillStyle = 'white';
+                 ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                 ctx.shadowBlur = 10;
+                 lines.forEach((l, i) => {
+                     ctx.fillText(l, cx, startY + (i * lineHeight) + yOff);
+                 });
+            } 
+            else if (animationType === AnimationType.Snap) {
+                 // Snap: Hard Impact Scale (Good for Beat Drops)
+                 // Drops from scale 4.0 to 1.0 very quickly (0.2s)
+                 const entryDur = 0.25;
+                 let scale = 1;
+                 if (elapsed < entryDur) {
+                    const t = elapsed / entryDur;
+                    // Ease out quint
+                    scale = 1 + (3 * Math.pow(1 - t, 3));
+                 }
+                 
+                 ctx.translate(cx, cy);
+                 ctx.scale(scale, scale);
+                 ctx.translate(-cx, -cy);
+                 
+                 // Gradient Style
+                 const gradient = ctx.createLinearGradient(cx - maxWidth/2, cy, cx + maxWidth/2, cy);
+                 gradient.addColorStop(0, '#fff');
+                 gradient.addColorStop(1, '#ffdd00');
+                 ctx.fillStyle = gradient;
+                 ctx.shadowColor = 'black';
+                 ctx.shadowBlur = 20;
+                 ctx.shadowOffsetX = 4;
+                 ctx.shadowOffsetY = 4;
+
+                 lines.forEach((l, i) => {
+                     ctx.fillText(l, cx, startY + i * lineHeight);
+                 });
+            }
+            else if (animationType === AnimationType.Karaoke) {
+                 // Karaoke: Stroke first, then Fill based on progress
+                 lines.forEach((l, i) => {
+                    const yPos = startY + i * lineHeight;
+                    
+                    // 1. Draw Background (Stroke/Hollow)
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                    ctx.lineWidth = 4;
+                    ctx.strokeText(l, cx, yPos);
+
+                    // 2. Draw Fill (Clipped)
+                    ctx.save();
+                    // Clip rect moves from left to right based on progress
+                    const textWidth = ctx.measureText(l).width;
+                    const leftX = cx - (textWidth / 2);
+                    
+                    // Slightly inaccurate per-line sync (block sync), but feels good visually
+                    const fillWidth = textWidth * Math.min(progress * 1.2, 1); // Speed up slightly to finish early
+                    
+                    ctx.beginPath();
+                    ctx.rect(leftX, yPos - lineHeight/2, fillWidth, lineHeight);
+                    ctx.clip();
+                    
+                    ctx.fillStyle = '#67e8f9'; // Cyan fill
+                    ctx.shadowColor = '#67e8f9';
+                    ctx.shadowBlur = 15;
+                    ctx.fillText(l, cx, yPos);
+                    ctx.restore();
+                 });
+            }
+            else if (animationType === AnimationType.Signal) {
+                 // Signal: Sine Wave Motion
+                 ctx.fillStyle = 'white';
+                 ctx.shadowColor = '#d8b4fe'; // Purple glow
+                 ctx.shadowBlur = 10;
+                 
+                 lines.forEach((l, i) => {
+                     const words = l.split('');
+                     let totalW = ctx.measureText(l).width;
+                     let currX = cx - totalW / 2;
+                     
+                     words.forEach((char, idx) => {
+                         const charW = ctx.measureText(char).width;
+                         // Wave calc
+                         const waveSpeed = 8;
+                         const waveFreq = 0.5;
+                         const amp = 15;
+                         const yOffset = Math.sin((currentTime * waveSpeed) + (idx * waveFreq)) * amp;
+                         
+                         ctx.fillText(char, currX + charW/2, startY + i * lineHeight + yOffset);
+                         currX += charW;
+                     });
+                 });
+            }
+            else if (animationType === AnimationType.Glitch) {
+                // Glitch: Random offsets and color separation
+                const isGlitchFrame = Math.random() > 0.8; // Flicker
+                const offsetX = isGlitchFrame ? (Math.random() - 0.5) * 10 : 0;
+                const offsetY = isGlitchFrame ? (Math.random() - 0.5) * 5 : 0;
                 
-                // Fill
-                ctx.shadowBlur = 30;
-                ctx.fillText(l, cx, yPos);
+                // RGB Split
+                // Red Channel
+                ctx.save();
+                ctx.fillStyle = 'rgba(255,0,0,0.7)';
+                ctx.translate(offsetX + 4, offsetY);
+                lines.forEach((l, i) => ctx.fillText(l, cx, startY + i * lineHeight));
+                ctx.restore();
                 
-                // Redraw specifically to boost glow (canvas text shadow can be weak)
-                ctx.shadowBlur = 50;
-                ctx.globalCompositeOperation = 'source-over';
-                ctx.strokeText(l, cx, yPos); 
-            });
+                // Blue Channel
+                ctx.save();
+                ctx.fillStyle = 'rgba(0,255,255,0.7)';
+                ctx.translate(-offsetX - 4, -offsetY);
+                lines.forEach((l, i) => ctx.fillText(l, cx, startY + i * lineHeight));
+                ctx.restore();
+                
+                // Main White
+                ctx.fillStyle = 'white';
+                lines.forEach((l, i) => ctx.fillText(l, cx, startY + i * lineHeight));
+            }
 
             ctx.restore();
         }
     }
 
-  }, [currentTime, lyrics, images, canvasWidth, canvasHeight, fontsLoaded, title]);
+  }, [currentTime, lyrics, images, canvasWidth, canvasHeight, fontsLoaded, title, animationType]);
 
   return (
     <canvas 

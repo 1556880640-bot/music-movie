@@ -5,10 +5,24 @@ export interface LyricSegment {
   visualPrompt?: string; // Prompt for image generation for this segment
 }
 
-export interface GeneratedImage {
-  timeIndex: number; // Maps to a specific time or segment index
-  imageUrl: string;
+export enum AnimationType {
+  Standard = 'standard',   // Soft Fade
+  Snap = 'snap',           // Hard Impact Scale
+  Karaoke = 'karaoke',     // Fill Color Progress
+  Signal = 'signal',       // Sine Wave Motion
+  Glitch = 'glitch',       // Cyberpunk jitter
+}
+
+export enum VisualType {
+  Image = 'image',
+  Video = 'video', // Uses Veo
+}
+
+export interface GeneratedVisual {
+  timeIndex: number; 
+  mediaUrl: string;
   prompt: string;
+  type: VisualType;
 }
 
 export enum AspectRatio {
@@ -19,15 +33,15 @@ export enum AspectRatio {
 export enum AppStatus {
   Idle = 'idle',
   Uploading = 'uploading',
-  AnalyzingAudio = 'analyzing_audio', // Transcription
-  GeneratingVisuals = 'generating_visuals', // Image Gen
+  AnalyzingAudio = 'analyzing_audio', 
+  GeneratingVisuals = 'generating_visuals', 
   Ready = 'ready',
   Error = 'error',
 }
 
 export interface MVData {
   lyrics: LyricSegment[];
-  images: GeneratedImage[];
+  images: GeneratedVisual[]; // Renamed in concept, but keeping var name consistent in App usually easier, but let's use the interface
   audioUrl: string;
   title: string;
 }
